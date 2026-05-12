@@ -17,6 +17,19 @@ export async function uploadVideo(formData) {
     return response.json();
 }
 
+export async function uploadImage(formData) {
+    const response = await fetch(`${API_BASE}/image`, {
+        method: "POST",
+        body: formData
+    });
+
+    if (!response.ok) {
+        throw new Error("Image upload failed");
+    }
+
+    return response.json();
+}
+
 export async function fetchStats(streamId) {
     const response = await fetch(`${API_BASE}/stats/${streamId}`);
     if (!response.ok) {
