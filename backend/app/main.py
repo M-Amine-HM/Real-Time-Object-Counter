@@ -304,11 +304,8 @@ def _stream_generator(
     tracker = CentroidTracker()
     fps = 0.0
     last_time = time.time()
-
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    line = _line_from_percent(width, height, line_y)
-    counter = LineCounter(line=line)
+    counter = LineCounter(line=(0, 0, 0, 0))
+    line_initialized = False
 
     while True:
         for _ in range(FRAME_SKIP):
@@ -322,6 +319,11 @@ def _stream_generator(
             scale = FRAME_WIDTH / frame.shape[1]
             frame = cv2.resize(
                 frame, (FRAME_WIDTH, int(frame.shape[0] * scale)))
+
+        if not line_initialized:
+            counter.line = _line_from_percent(
+                frame.shape[1], frame.shape[0], line_y)
+            line_initialized = True
 
         boxes = detector.detect(frame, selected_classes=selected_classes)
         tracked = tracker.update(boxes)
