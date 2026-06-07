@@ -1,8 +1,15 @@
 import React from "react";
+import ClassSelector from "./ClassSelector.jsx";
+import LinePlanner from "./LinePlanner.jsx";
 
 export default function ControlPanel({
     uploadType,
     onUploadTypeChange,
+    classes,
+    selectedClasses,
+    onSelectedClassesChange,
+    lineY,
+    onLineYChange,
     onUpload,
     onStartWebcam,
     onStopWebcam,
@@ -23,6 +30,19 @@ export default function ControlPanel({
                     <option value="image">Image</option>
                 </select>
             </div>
+
+            <ClassSelector
+                classes={classes}
+                selectedClasses={selectedClasses}
+                onChange={onSelectedClassesChange}
+                loading={loading}
+            />
+
+            <LinePlanner
+                lineY={lineY}
+                onLineYChange={onLineYChange}
+                loading={loading}
+            />
 
             <div className="panel-row">
                 <label className="label">Upload File</label>

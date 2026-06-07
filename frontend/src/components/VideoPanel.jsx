@@ -1,6 +1,7 @@
 import React from "react";
 
 export default function VideoPanel({ streamUrl }) {
+
     if (!streamUrl) {
         return (
             <div className="video-placeholder">
@@ -11,7 +12,7 @@ export default function VideoPanel({ streamUrl }) {
 
     return (
         <div className="video-shell">
-            <img src={streamUrl} alt="Processed stream" />
+            <img src={streamUrl} alt="Processed stream" draggable="false" />
         </div>
     );
 }

@@ -1,6 +1,6 @@
 # Object Detection and Counting Web App
 
-A full-stack YOLO detection dashboard that streams processed video frames with bounding boxes, IDs, a live count, and FPS. The frontend lets you upload a video or image and start/stop the webcam stream.
+A full-stack YOLO detection dashboard that streams processed video frames with bounding boxes, IDs, a live count, and FPS. The frontend lets you upload a video or image, choose multiple YOLO classes from a searchable list, adjust the counting line position, and start/stop the webcam stream.
 
 ## Project Structure
 
@@ -41,6 +41,8 @@ The UI runs at `http://localhost:5173`.
 
 - Upload a video to generate a stream URL for processed frames.
 - Upload an image to get a processed JPEG with detected boxes.
+- Use the class search box to filter the 80 COCO classes and select multiple labels.
+- Move the line slider to change the counting line position.
 - Use the webcam toggle to start/stop live detection.
 
 ## Notes

@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 import ControlPanel from "./components/ControlPanel.jsx";
 import VideoPanel from "./components/VideoPanel.jsx";
 import StatCard from "./components/StatCard.jsx";
-import { buildStreamUrl, fetchStats, uploadImage, uploadVideo } from "./api.js";
+import { buildStreamUrl, fetchClasses, fetchStats, uploadImage, uploadVideo } from "./api.js";
+
+const DEFAULT_CLASSES = ["car", "truck", "bus", "motorcycle"];
 
 export default function App() {
     const [streamUrl, setStreamUrl] = useState("");
@@ -11,7 +13,23 @@ export default function App() {
     const [loading, setLoading] = useState(false);
     const [isStreaming, setIsStreaming] = useState(false);
     const [uploadType, setUploadType] = useState("video");
+    const [availableClasses, setAvailableClasses] = useState([]);
+    const [selectedClasses, setSelectedClasses] = useState(DEFAULT_CLASSES);
+    const [lineY, setLineY] = useState(65);
     const pollingRef = useRef(null);
+
+    useEffect(() => {
+        const loadClasses = async () => {
+            try {
+                const classList = await fetchClasses();
+                setAvailableClasses(classList);
+            } catch (error) {
+                setAvailableClasses(DEFAULT_CLASSES);
+            }
+        };
+
+        loadClasses();
+    }, []);
 
     const startPolling = (id) => {
         if (pollingRef.current) {
@@ -47,17 +65,25 @@ export default function App() {
 
         const formData = new FormData();
         formData.append("file", file);
+        formData.append("classes", selectedClasses.join(","));
+        formData.append("line_y", String(lineY));
 
         try {
             if (uploadType === "image") {
-                const response = await uploadImage(formData);
+                const response = await uploadImage(formData, {
+                    classes: selectedClasses,
+                    lineY
+                });
                 const url = buildStreamUrl(response.image_url);
                 setStreamUrl(url);
                 setStreamId(response.image_id);
                 setIsStreaming(false);
                 setStats({ count: response.count ?? 0, fps: 0 });
             } else {
-                const response = await uploadVideo(formData);
+                const response = await uploadVideo(formData, {
+                    classes: selectedClasses,
+                    lineY
+                });
                 const url = buildStreamUrl(response.stream_url);
                 setStreamUrl(url);
                 setStreamId(response.stream_id);
@@ -73,7 +99,10 @@ export default function App() {
 
     const handleStartWebcam = () => {
         stopPolling();
-        const url = buildStreamUrl("/webcam");
+        const url = buildStreamUrl("/webcam", {
+            classes: selectedClasses,
+            lineY
+        });
         setStreamUrl(url);
         setStreamId("webcam");
         setIsStreaming(true);
@@ -110,6 +139,11 @@ export default function App() {
                 <ControlPanel
                     uploadType={uploadType}
                     onUploadTypeChange={setUploadType}
+                    classes={availableClasses}
+                    selectedClasses={selectedClasses}
+                    onSelectedClassesChange={setSelectedClasses}
+                    lineY={lineY}
+                    onLineYChange={setLineY}
                     onUpload={handleUpload}
                     onStartWebcam={handleStartWebcam}
                     onStopWebcam={handleStopWebcam}
@@ -122,7 +156,9 @@ export default function App() {
                         <p>Processed Stream</p>
                         {loading && <span className="badge">Loading...</span>}
                     </div>
-                    <VideoPanel streamUrl={streamUrl} />
+                    <VideoPanel
+                        streamUrl={streamUrl}
+                    />
                 </section>
             </main>
 

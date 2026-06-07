@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
 from typing import Generator
+from urllib.parse import quote_plus
 
 import cv2
 import numpy as np
@@ -25,12 +26,13 @@ APP_TITLE = "Object Detection and Counting"
 MODEL_NAME = "yolov8n.pt"
 FRAME_WIDTH = 960
 FRAME_SKIP = 0
-# DETECT_CLASSES = {"car", "truck", "bus", "motorbike"}
-DETECT_CLASSES = {"car", "person"}
 UPLOAD_DIR = Path(__file__).resolve().parent.parent / "data" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "data" / "outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+YOLO_MODEL = YOLO(MODEL_NAME)
+COCO_CLASSES = [YOLO_MODEL.names[index] for index in sorted(YOLO_MODEL.names)]
+DEFAULT_CLASSES = {"car", "truck", "bus", "motorcycle"}
 
 
 @dataclass
@@ -147,24 +149,35 @@ class StreamStats:
     fps: float = 0.0
 
 
+@dataclass
+class UploadJob:
+    path: str
+    classes: set[str]
+    line_y: int
+
+
 _stats: dict[str, StreamStats] = {}
-_uploads: dict[str, str] = {}
+_uploads: dict[str, UploadJob] = {}
 _images: dict[str, str] = {}
 _lock = Lock()
 
 
 class YOLODetector:
     def __init__(self, model_name: str = MODEL_NAME) -> None:
-        self.model = YOLO(model_name)
+        self.model = YOLO_MODEL
 
-    def detect(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
+    def detect(
+        self,
+        frame: np.ndarray,
+        selected_classes: set[str] | None = None,
+    ) -> list[tuple[int, int, int, int]]:
         results = self.model(frame, verbose=False)[0]
         boxes: list[tuple[int, int, int, int]] = []
 
         for box in results.boxes:
             cls_index = int(box.cls[0])
             label = self.model.names.get(cls_index, "")
-            if DETECT_CLASSES and label not in DETECT_CLASSES:
+            if selected_classes and label not in selected_classes:
                 continue
 
             x1, y1, x2, y2 = box.xyxy[0].tolist()
@@ -194,6 +207,36 @@ def _get_stats(stream_id: str) -> dict[str, float] | None:
         if stats is None:
             return None
         return {"count": stats.count, "fps": stats.fps}
+
+
+def _parse_classes(raw_classes: str | None) -> set[str]:
+    if not raw_classes:
+        return set()
+
+    parsed = {
+        item.strip()
+        for item in raw_classes.split(",")
+        if item.strip() in COCO_CLASSES
+    }
+    return parsed
+
+
+def _clamp_line_y(line_y: int | None) -> int:
+    if line_y is None:
+        return 65
+    return max(5, min(95, line_y))
+
+
+def _line_from_percent(width: int, height: int, line_y: int) -> tuple[int, int, int, int]:
+    y = int(height * _clamp_line_y(line_y) / 100)
+    return (0, y, width, y)
+
+
+def _stream_query(classes: set[str], line_y: int) -> str:
+    params = [f"line_y={_clamp_line_y(line_y)}"]
+    if classes:
+        params.append(f"classes={quote_plus(','.join(sorted(classes)))}")
+    return "&".join(params)
 
 
 def _draw_overlay(frame, boxes, tracked, counter: LineCounter, fps: float) -> None:
@@ -255,6 +298,8 @@ def _stream_generator(
     cap: cv2.VideoCapture,
     detector: YOLODetector,
     stream_id: str,
+    selected_classes: set[str],
+    line_y: int,
 ) -> Generator[bytes, None, None]:
     tracker = CentroidTracker()
     fps = 0.0
@@ -262,7 +307,7 @@ def _stream_generator(
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    line = (0, int(height * 0.65), width, int(height * 0.65))
+    line = _line_from_percent(width, height, line_y)
     counter = LineCounter(line=line)
 
     while True:
@@ -278,7 +323,7 @@ def _stream_generator(
             frame = cv2.resize(
                 frame, (FRAME_WIDTH, int(frame.shape[0] * scale)))
 
-        boxes = detector.detect(frame)
+        boxes = detector.detect(frame, selected_classes=selected_classes)
         tracked = tracker.update(boxes)
 
         for object_id, centroid in tracked.items():
@@ -304,27 +349,58 @@ def _stream_generator(
     cap.release()
 
 
-def _stream_response(cap: cv2.VideoCapture, detector: YOLODetector, stream_id: str):
-    generator = _stream_generator(cap, detector, stream_id)
+def _stream_response(
+    cap: cv2.VideoCapture,
+    detector: YOLODetector,
+    stream_id: str,
+    selected_classes: set[str],
+    line_y: int,
+):
+    generator = _stream_generator(
+        cap, detector, stream_id, selected_classes, line_y)
     return StreamingResponse(generator, media_type="multipart/x-mixed-replace; boundary=frame")
 
 
+@app.get("/classes")
+def classes():
+    return {"classes": COCO_CLASSES}
+
+
 @app.post("/upload")
-def upload_video(file: UploadFile = File(...)):
+def upload_video(
+    file: UploadFile = File(...),
+    classes: str | None = None,
+    line_y: int | None = None,
+):
     file_id = str(uuid.uuid4())
     input_path = UPLOAD_DIR / f"{file_id}_{file.filename}"
+    selected_classes = _parse_classes(classes)
+    chosen_line_y = _clamp_line_y(line_y)
 
     with input_path.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    _uploads[file_id] = str(input_path)
-    return {"stream_id": file_id, "stream_url": f"/stream/{file_id}"}
+    _uploads[file_id] = UploadJob(
+        path=str(input_path),
+        classes=selected_classes,
+        line_y=chosen_line_y,
+    )
+    return {
+        "stream_id": file_id,
+        "stream_url": f"/stream/{file_id}?{_stream_query(selected_classes, chosen_line_y)}",
+    }
 
 
 @app.post("/image")
-def upload_image(file: UploadFile = File(...)):
+def upload_image(
+    file: UploadFile = File(...),
+    classes: str | None = None,
+    line_y: int | None = None,
+):
     file_id = str(uuid.uuid4())
     input_path = UPLOAD_DIR / f"{file_id}_{file.filename}"
+    selected_classes = _parse_classes(classes)
+    chosen_line_y = _clamp_line_y(line_y)
 
     with input_path.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
@@ -338,8 +414,11 @@ def upload_image(file: UploadFile = File(...)):
         frame = cv2.resize(frame, (FRAME_WIDTH, int(frame.shape[0] * scale)))
 
     detector = YOLODetector()
-    boxes = detector.detect(frame)
+    boxes = detector.detect(frame, selected_classes=selected_classes)
     _draw_image_overlay(frame, boxes, len(boxes))
+
+    line = _line_from_percent(frame.shape[1], frame.shape[0], chosen_line_y)
+    cv2.line(frame, (line[0], line[1]), (line[2], line[3]), (255, 70, 70), 2)
 
     output_path = OUTPUT_DIR / f"{file_id}.jpg"
     cv2.imwrite(str(output_path), frame)
@@ -351,14 +430,20 @@ def upload_image(file: UploadFile = File(...)):
 
 
 @app.get("/stream/{stream_id}")
-def stream_uploaded_video(stream_id: str):
-    input_path = _uploads.get(stream_id)
-    if input_path is None:
+def stream_uploaded_video(
+    stream_id: str,
+    classes: str | None = None,
+    line_y: int | None = None,
+):
+    job = _uploads.get(stream_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="Upload not found")
 
+    selected_classes = _parse_classes(classes) or job.classes
+    chosen_line_y = _clamp_line_y(line_y if line_y is not None else job.line_y)
     detector = YOLODetector()
-    cap = cv2.VideoCapture(input_path)
-    return _stream_response(cap, detector, stream_id)
+    cap = cv2.VideoCapture(job.path)
+    return _stream_response(cap, detector, stream_id, selected_classes, chosen_line_y)
 
 
 @app.get("/image/{image_id}")
@@ -370,10 +455,12 @@ def get_image(image_id: str):
 
 
 @app.get("/webcam")
-def webcam_stream():
+def webcam_stream(classes: str | None = None, line_y: int | None = None):
+    selected_classes = _parse_classes(classes)
+    chosen_line_y = _clamp_line_y(line_y)
     detector = YOLODetector()
     cap = cv2.VideoCapture(0)
-    return _stream_response(cap, detector, "webcam")
+    return _stream_response(cap, detector, "webcam", selected_classes, chosen_line_y)
 
 
 @app.get("/stats/{stream_id}")
